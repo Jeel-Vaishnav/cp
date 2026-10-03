@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: campus-connect-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health.php
+    envVars:
+      - key: PORT
+        value: 80
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: 4000
+      - key: DB_NAME
+        value: campus_connect
+      - key: DB_USER
+        sync: false
+      - key: DB_PASS
+        sync: false
+      - key: DB_SSL
+        value: true

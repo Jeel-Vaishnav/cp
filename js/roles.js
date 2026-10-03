@@ -394,49 +394,35 @@ function submitStudentFeedbackWithComment(id) {
   submitStudentFeedback(id, feedback, comment);
 }
 
-function submitStudentFeedback(id, feedback, comment = '') {
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
-
-  c.feedback = feedback;
-  c.feedbackComment = comment || c.feedbackComment || '';
-  c.feedbackTime = nowStr();
-
-  if (feedback === 'Satisfied') {
-    c.feedbackStatus = 'Satisfied';
-    c.logs.push({ 
-      s: 'Student Feedback', 
-      note: `Student confirmed satisfied.${c.feedbackComment ? ` Remark: "${c.feedbackComment}"` : ''}`, 
-      time: nowStr(), 
-      by: c.reportedBy 
+async function submitStudentFeedback(id, feedback, comment = '') {
+  const isSatisfied = (feedback === 'Satisfied');
+  try {
+    const res = await fetch('api/complaints/feedback.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        rating: isSatisfied ? 5 : 2,
+        comment: comment,
+        furtherAction: !isSatisfied
+      })
     });
-    toast('Thank you for your feedback.');
-  } else {
-    c.feedbackStatus = 'Student Not Satisfied';
-    c.status = 'Student Not Satisfied';
-    c.current_status = 'Student Not Satisfied';
-    c.logs.push({ 
-      s: 'Student Feedback', 
-      note: `Student reported: Not Satisfied.${c.feedbackComment ? ` Remark: "${c.feedbackComment}"` : ''}`, 
-      time: nowStr(), 
-      by: c.reportedBy 
-    });
-
-    appState.notifs.unshift({
-      id: 'N' + Date.now(),
-      forGr: null,
-      forDept: null,
-      forTech: null,
-      text: `Feedback Alert: Complaint ${c.id} - Student ${c.reportedBy} (GR: ${c.reportedByGr}, ${c.category}) is Not Satisfied with "${c.title}" (Technician: ${c.techName || 'Unassigned'}). Feedback status: Not Satisfied.${c.feedbackComment ? ` Comment: "${c.feedbackComment}"` : ''}`,
-      time: nowStr(),
-      read: false
-    });
-
-    toast('Feedback recorded. Admin has been notified.', 'err');
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Failed to submit feedback', 'err');
+    }
+    if (isSatisfied) {
+      toast('Thank you for your feedback.');
+    } else {
+      toast('Feedback recorded. Admin has been notified.', 'err');
+    }
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderStudent();
+  } catch (err) {
+    toast('Error recording feedback: ' + err.message, 'err');
   }
-
-  persist();
-  renderStudent();
 }
 
 
@@ -636,7 +622,7 @@ function openAdminRouteModal(id) {
 
 function closeAdminRouteModal() { document.getElementById('modalAdminRoute')?.classList.add('hidden'); }
 
-function confirmAdminDispatch(e) {
+async function confirmAdminDispatch(e) {
   e.preventDefault();
   const id = document.getElementById('adminVerifyId').value;
   const dept = document.getElementById('adminRouteDept').value;
@@ -646,74 +632,61 @@ function confirmAdminDispatch(e) {
 
   const wasRework = Boolean(c.feedback === 'Not Satisfied' || c.status === 'Student Not Satisfied');
 
-  c.category = dept;
-  c.status = 'Assigned to Faculty';
-  c.current_status = 'Assigned to Faculty';
-  c.stage = 2;
-  c.admin_status = 'Approved';
-  c.admin_verification_date = nowStr();
-  c.faculty_status = 'Pending';
-  c.technician_status = 'Pending';
-  c.work_status = 'Not Started';
-  c.feedback = null;
-  c.feedbackStatus = null;
+  try {
+    const res = await fetch('api/complaints/assign.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        dept: dept,
+        priority: c.priority || 'Low',
+        note: wasRework ? 'Rework requested by Admin' : 'Admin verification approved'
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Dispatch failed', 'err');
+    }
 
-  c.logs.push({ 
-    s: 'Admin Verified', 
-    note: wasRework
-      ? `Sent back by Admin to ${dept} Faculty Advisor for rework & technician reassignment`
-      : `Approved by Admin & assigned to ${dept} Faculty Advisor`, 
-    time: nowStr(), 
-    by: 'Admin Office' 
-  });
-
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: c.reportedByGr,
-    forDept: dept,
-    forTech: null,
-    text: wasRework
-      ? `Admin sent complaint ${c.id} back to ${dept} Faculty for rework.`
-      : `Admin verified complaint ${c.id} and assigned to ${dept} Faculty.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  closeAdminRouteModal();
-  toast(wasRework ? `Complaint ${c.id} sent back to ${dept} Faculty for rework.` : `Complaint ${c.id} verified & assigned to ${dept} Faculty.`);
-  renderAdmin();
+    closeAdminRouteModal();
+    toast(wasRework ? `Complaint ${id} sent back to ${dept} Faculty for rework.` : `Complaint ${id} verified & assigned to ${dept} Faculty.`);
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdmin();
+  } catch (err) {
+    toast('Error dispatching complaint: ' + err.message, 'err');
+  }
 }
 
-function adminRejectTicket() {
+async function adminRejectTicket() {
   const id = document.getElementById('adminVerifyId').value;
   const c = appState.complaints.find(x => x.id === id);
   if (!c) return;
 
-  c.status = 'Rejected by Admin';
-  c.current_status = 'Rejected by Admin';
-  c.stage = 0;
-  c.admin_status = 'Rejected';
-  c.faculty_status = 'Rejected';
-  c.technician_status = 'Cancelled';
-  c.work_status = 'Cancelled';
-  c.rejectionReason = 'Rejected by Admin during initial verification';
-  c.logs.push({ s: 'Rejected by Admin', note: 'Fraud / non-compliant complaint rejected by Admin.', time: nowStr(), by: 'Admin Office' });
+  try {
+    const res = await fetch('api/complaints/reject.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        reason: 'Fraud / non-compliant complaint rejected by Admin.'
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Rejection failed', 'err');
+    }
 
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: c.reportedByGr,
-    forDept: null,
-    forTech: null,
-    text: `Your complaint ${c.id} was rejected by Admin verification.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  closeAdminRouteModal();
-  toast('Complaint rejected & archived.', 'err');
-  renderAdmin();
+    closeAdminRouteModal();
+    toast('Complaint rejected & archived.', 'err');
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdmin();
+  } catch (err) {
+    toast('Error rejecting complaint: ' + err.message, 'err');
+  }
 }
 
 function renderAdminFinalTickets() {
@@ -788,35 +761,27 @@ function renderAdminFinalTickets() {
   if (typeof initScrollObserver === 'function') setTimeout(initScrollObserver, 50);
 }
 
-function confirmAdminFinalApproval(id) {
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
-
-  c.status = 'Completed';
-  c.current_status = 'Completed';
-  c.stage = 7;
-  c.admin_final_date = nowStr();
-  c.logs.push({ s: 'Admin Final Verified', note: 'Admin verified faculty audit and approved completion.', time: nowStr(), by: 'Admin Office' });
-  c.logs.push({ s: 'Completed', note: 'Complaint fully completed and officially closed.', time: nowStr(), by: 'System' });
-  
-  if (c.techId) {
-    const t = appState.technicians.find(x => x.id === c.techId);
-    if (t) t.rating = Math.min(5.0, Number((t.rating + 0.1).toFixed(1)));
+async function confirmAdminFinalApproval(id) {
+  try {
+    const res = await fetch('api/complaints/verify.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Approval failed', 'err');
+    }
+    toast(`Complaint ${id} verified and marked Completed ✅!`);
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdmin();
+  } catch (err) {
+    toast('Error approving complaint: ' + err.message, 'err');
   }
-
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: c.reportedByGr,
-    forDept: null,
-    forTech: c.techId,
-    text: `Your complaint ${c.id} has been verified by Admin and is now Completed ✅.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  toast(`Complaint ${c.id} verified and marked Completed ✅!`);
-  renderAdmin();
 }
 
 
@@ -937,32 +902,28 @@ function renderTechnician() {
   if (typeof initScrollObserver === 'function') setTimeout(initScrollObserver, 50);
 }
 
-function acceptTechComplaint(id) {
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
-
-  c.status = 'Work in Progress';
-  c.current_status = 'Work in Progress';
-  c.stage = 4;
-  c.technician_status = 'Accepted';
-  c.technician_action = 'Accepted';
-  c.work_status = 'In Progress';
-  c.logs.push({ s: 'Technician Accepted', note: 'Technician accepted complaint work order', time: nowStr(), by: currentSession.name });
-  c.logs.push({ s: 'Work in Progress', note: 'Resolution work actively underway', time: nowStr(), by: currentSession.name });
-
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: c.reportedByGr,
-    forDept: null,
-    forTech: null,
-    text: `Technician ${currentSession.name} accepted your complaint ${c.id} and started work.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  toast('Complaint accepted! Work is now in progress.');
-  renderTechnician();
+async function acceptTechComplaint(id) {
+  try {
+    const res = await fetch('api/complaints/update.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        action: 'accept'
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Acceptance failed', 'err');
+    }
+    toast('Complaint accepted! Work is now in progress.');
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderTechnician();
+  } catch (err) {
+    toast('Error accepting complaint: ' + err.message, 'err');
+  }
 }
 
 function openDeclineTechModal(id) {
@@ -973,59 +934,34 @@ function openDeclineTechModal(id) {
 
 function closeDeclineTechModal() { document.getElementById('modalDeclineTech')?.classList.add('hidden'); }
 
-function confirmDeclineTech(e) {
+async function confirmDeclineTech(e) {
   e.preventDefault();
   const id = document.getElementById('declineTechId').value;
   const reason = document.getElementById('declineTechReason').value.trim();
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
+  if (!reason) return toast('Please specify reason for declining', 'err');
 
-  const techName = currentSession ? currentSession.name : 'Technician';
-
-  c.status = 'Assigned to Faculty';
-  c.current_status = 'Assigned to Faculty';
-  c.stage = 2;
-  c.technician_status = 'Rejected';
-  c.technician_action = 'Rejected';
-  c.work_status = 'Not Started';
-  c.faculty_status = 'Pending Reassignment';
-  c.lastRejectedTech = techName;
-  c.rejectionReason = reason;
-  c.techId = null;
-  c.techName = null;
-  c.deadline = '';
-
-  c.logs.push({ 
-    s: 'Technician Declined', 
-    note: `Declined by ${techName}: "${reason}" — Returned to Faculty for technician reassignment`, 
-    time: nowStr(), 
-    by: techName 
-  });
-
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: null,
-    forDept: c.category,
-    forTech: null,
-    text: `Technician ${techName} declined complaint ${c.id}: "${reason}". Please reassign another technician.`,
-    time: nowStr(),
-    read: false
-  });
-
-  appState.notifs.unshift({
-    id: 'N' + (Date.now() + 1),
-    forGr: c.reportedByGr,
-    forDept: null,
-    forTech: null,
-    text: `Technician ${techName} was unavailable (${reason}). Department Faculty is reassigning a new technician.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  closeDeclineTechModal();
-  toast('Work order declined. Reason submitted to Faculty for technician reassignment.');
-  renderTechnician();
+  try {
+    const res = await fetch('api/complaints/reject.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        reason: reason
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Decline failed', 'err');
+    }
+    closeDeclineTechModal();
+    toast('Work order declined. Reason submitted to Faculty for technician reassignment.');
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderTechnician();
+  } catch (err) {
+    toast('Error declining work order: ' + err.message, 'err');
+  }
 }
 
 function openCompleteTechModal(id) {
@@ -1039,40 +975,35 @@ function openCompleteTechModal(id) {
 
 function closeCompleteTechModal() { document.getElementById('modalCompleteTech')?.classList.add('hidden'); }
 
-function confirmCompleteTech(e) {
+async function confirmCompleteTech(e) {
   e.preventDefault();
   const id = document.getElementById('completeTechId').value;
   const remark = document.getElementById('completeRemark').value.trim();
   if (!tmpBase64Proof) return toast('Please upload photograph proof of completed work', 'err');
 
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
-
-  c.status = 'Work Completed by Technician';
-  c.current_status = 'Work Completed by Technician';
-  c.stage = 5;
-  c.technician_status = 'Completed';
-  c.work_status = 'Completed';
-  c.technician_completion_date = nowStr();
-  c.proofImg = tmpBase64Proof;
-  c.remark = remark;
-  c.logs.push({ s: 'Technician Completed', note: remark, time: nowStr(), by: currentSession.name });
-  c.logs.push({ s: 'Sent to Faculty', note: 'Transferred to Department Faculty for QA Verification', time: nowStr(), by: currentSession.name });
-
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: c.reportedByGr,
-    forDept: c.category,
-    forTech: null,
-    text: `Technician finished work on ${c.id}. Ready for Faculty Verification.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  closeCompleteTechModal();
-  toast('Work completed! Transferred to Faculty Dashboard for verification.');
-  renderTechnician();
+  try {
+    const res = await fetch('api/complaints/complete.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        proof_image: tmpBase64Proof,
+        remark: remark
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Completion failed', 'err');
+    }
+    closeCompleteTechModal();
+    toast('Work completed! Transferred to Faculty Dashboard for verification.');
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderTechnician();
+  } catch (err) {
+    toast('Error completing work: ' + err.message, 'err');
+  }
 }
 
 
@@ -1257,56 +1188,39 @@ function openFacultyForwardModal(id) {
 
 function closeFacultyForwardModal() { document.getElementById('modalFacultyForward')?.classList.add('hidden'); }
 
-function confirmFacultyForward(e) {
+async function confirmFacultyForward(e) {
   e.preventDefault();
   const id = document.getElementById('forwardVerifyId').value;
   const select = document.getElementById('forwardSelectedTech');
   const techId = select ? select.value : null;
-  const techObj = appState.technicians.find(x => x.id === techId) || appState.technicians[0];
-  const techName = techObj ? techObj.name : 'Assigned Technician';
   const deadline = document.getElementById('forwardDeadline')?.value || '';
 
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
+  if (!techId) return toast('Please select a technician', 'err');
 
-  const wasReassigned = Boolean(c.lastRejectedTech || c.technician_status === 'Rejected');
+  try {
+    const res = await fetch('api/complaints/assign.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        technician_id: techId,
+        deadline: deadline
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Assignment failed', 'err');
+    }
 
-  c.techId = techObj ? techObj.id : techId;
-  c.techName = techName;
-  c.deadline = deadline;
-  c.status = 'Assigned to Technician';
-  c.current_status = 'Assigned to Technician';
-  c.stage = 3;
-  c.faculty_status = 'Dispatched';
-  c.technician_status = 'Pending';
-  c.work_status = 'Not Started';
-  c.lastRejectedTech = null;
-
-  c.logs.push({ 
-    s: 'Faculty Assigned Tech', 
-    note: wasReassigned
-      ? `Reassigned to Technician ${techName} with deadline ${deadline || 'N/A'}`
-      : `Faculty assigned work to Technician ${techName} with deadline ${deadline || 'N/A'}`, 
-    time: nowStr(), 
-    by: currentSession.name 
-  });
-
-  appState.notifs.unshift({
-    id: 'N' + Date.now(),
-    forGr: c.reportedByGr,
-    forDept: null,
-    forTech: c.techId,
-    text: wasReassigned 
-      ? `Faculty reassigned complaint ${c.id} to Technician ${techName}.`
-      : `Faculty assigned complaint ${c.id} to Technician ${techName}.`,
-    time: nowStr(),
-    read: false
-  });
-
-  persist();
-  closeFacultyForwardModal();
-  toast(`Work order dispatched to Technician ${techName}.`);
-  renderFaculty();
+    closeFacultyForwardModal();
+    toast(data.message || 'Work order dispatched to Technician.');
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderFaculty();
+  } catch (err) {
+    toast('Error assigning technician: ' + err.message, 'err');
+  }
 }
 
 function openFacultyQaModal(id) {
@@ -1330,46 +1244,39 @@ function setFacultyQaApproval(approve) {
   }
 }
 
-function confirmFacultyQa(e) {
+async function confirmFacultyQa(e) {
   e.preventDefault();
   const id = document.getElementById('qaVerifyId').value;
   const comment = document.getElementById('qaFeedbackComment').value.trim();
-  const c = appState.complaints.find(x => x.id === id);
-  if (!c) return;
 
-  if (qaApprovalState) {
-    c.status = 'Faculty Verified';
-    c.current_status = 'Faculty Verified';
-    c.stage = 6;
-    c.faculty_status = 'Verified';
-    c.faculty_verification_date = nowStr();
-    c.qaVerified = true;
-    c.qaFeedback = comment || 'Verified and approved by Faculty Advisor';
-    c.logs.push({ s: 'Faculty Verified', note: c.qaFeedback + ' - Sent to Admin for final approval', time: nowStr(), by: currentSession.name });
-
-    appState.notifs.unshift({
-      id: 'N' + Date.now(),
-      forGr: null,
-      forDept: null,
-      forTech: null,
-      text: `Faculty verified ${c.id}. Awaiting Admin final verification and completion.`,
-      time: nowStr(),
-      read: false
+  try {
+    const res = await fetch('api/complaints/verify.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        complaint_id: id,
+        approved: qaApprovalState,
+        feedback: comment
+      })
     });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Verification failed', 'err');
+    }
 
-    toast('Inspection completed! Sent to Admin for final verification.');
-  } else {
-    c.status = 'Work in Progress';
-    c.current_status = 'Work in Progress';
-    c.stage = 4;
-    c.faculty_status = 'Redo Requested';
-    c.logs.push({ s: 'Faculty Redo Requested', note: comment, time: nowStr(), by: currentSession.name });
-    toast('Redo requested. Returned to technician queue.', 'err');
+    closeFacultyQaModal();
+    if (qaApprovalState) {
+      toast('Inspection completed! Sent to Admin for final verification.');
+    } else {
+      toast('Redo requested. Returned to technician queue.', 'err');
+    }
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderFaculty();
+  } catch (err) {
+    toast('Error verifying work: ' + err.message, 'err');
   }
-
-  persist();
-  closeFacultyQaModal();
-  renderFaculty();
 }
 
 
@@ -1434,7 +1341,7 @@ function editStaff(id) {
   document.getElementById('modalStaff').classList.remove('hidden');
 }
 
-function saveStaff(e) {
+async function saveStaff(e) {
   e.preventDefault();
   const editId = document.getElementById('staffEditId').value;
   const name = document.getElementById('staffName').value.trim();
@@ -1442,27 +1349,52 @@ function saveStaff(e) {
   const exp = parseInt(document.getElementById('staffExp').value, 10);
   const pass = document.getElementById('staffPassNew').value;
 
-  if (editId) {
-    const t = appState.technicians.find(x => x.id === editId);
-    t.name = name; t.dept = dept; t.experience = exp; t.password = pass;
-    toast(`Technician details updated.`);
-  } else {
-    const newId = 'TECH-' + String(appState.technicians.length + 1).padStart(2, '0');
-    appState.technicians.push({ id: newId, name, dept, experience: exp, rating: 5.0, active: true, password: pass });
-    toast(`Registered technician: ${name} assigned to ${dept}`);
+  try {
+    const res = await fetch('api/staff/save.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: editId,
+        name: name,
+        dept: dept,
+        experience: exp,
+        password: pass
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Failed to save staff', 'err');
+    }
+    closeStaffModal();
+    toast(data.message || 'Staff record updated');
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdminStaff();
+  } catch (err) {
+    toast('Error saving technician: ' + err.message, 'err');
   }
-  persist();
-  closeStaffModal();
-  renderAdminStaff();
 }
 
-function toggleStaff(id) {
-  const t = appState.technicians.find(x => x.id === id);
-  if (!t) return;
-  t.active = !t.active;
-  persist();
-  toast(t.active ? 'Technician account activated.' : 'Technician account deactivated.');
-  renderAdminStaff();
+async function toggleStaff(id) {
+  try {
+    const res = await fetch('api/staff/status.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Status toggle failed', 'err');
+    }
+    toast(data.message);
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdminStaff();
+  } catch (err) {
+    toast('Error updating technician status', 'err');
+  }
 }
 
 function renderAdminStudents() {
@@ -1515,7 +1447,7 @@ function adminOverrideStudentProfile(grNo) {
 
 function closeAdminUserEdit() { document.getElementById('modalAdminUserEdit')?.classList.add('hidden'); }
 
-function saveAdminUserEdit(e) {
+async function saveAdminUserEdit(e) {
   e.preventDefault();
   const gr = document.getElementById('adminUserEditGr').value;
   const name = document.getElementById('adminUserEditName').value.trim();
@@ -1523,29 +1455,69 @@ function saveAdminUserEdit(e) {
   const pass = document.getElementById('adminUserEditPass').value;
   const img = document.getElementById('adminUserEditImgUrl').value.trim();
 
-  const u = appState.users.find(x => x.grNo === gr);
-  if (u) {
-    u.name = name; u.dept = dept; u.password = pass; u.avatar = img || null; persist();
+  try {
+    const res = await fetch('api/users/update.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        gr_no: gr,
+        name: name,
+        department: dept,
+        password: pass,
+        avatar: img
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Update failed', 'err');
+    }
+    closeAdminUserEdit();
     toast(`Administrative profile override applied for student: ${name}`);
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdminStudents();
+  } catch (err) {
+    toast('Error updating student: ' + err.message, 'err');
   }
-  closeAdminUserEdit();
-  renderAdminStudents();
 }
 
-function toggleStudentWarnStatus(gr) {
-  const u = appState.users.find(x => x.grNo === gr);
-  if (!u) return;
-  u.warned = !u.warned; persist();
-  toast(`Student warning status updated.`);
-  renderAdminStudents();
+async function toggleStudentWarnStatus(gr) {
+  try {
+    const res = await fetch('api/users/status.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gr_no: gr, field: 'warned' })
+    });
+    const data = await res.json();
+    if (!data.success) return toast(data.message, 'err');
+    toast(data.message);
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdminStudents();
+  } catch (err) {
+    toast('Error updating warning status', 'err');
+  }
 }
 
-function toggleStudentSuspendStatus(gr) {
-  const u = appState.users.find(x => x.grNo === gr);
-  if (!u) return;
-  u.suspended = !u.suspended; persist();
-  toast(`Student suspension status updated.`);
-  renderAdminStudents();
+async function toggleStudentSuspendStatus(gr) {
+  try {
+    const res = await fetch('api/users/status.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gr_no: gr, field: 'suspended' })
+    });
+    const data = await res.json();
+    if (!data.success) return toast(data.message, 'err');
+    toast(data.message);
+    if (typeof syncAppState === 'function') {
+      await syncAppState();
+    }
+    renderAdminStudents();
+  } catch (err) {
+    toast('Error updating suspension status', 'err');
+  }
 }
 
 
@@ -1649,9 +1621,9 @@ function renderReports() {
   }
 }
 
-function exportCSV() {
+function fallbackExportCSV() {
   let csv = 'Complaint ID,Student Name,Enrollment GR,Department,Complaint Title,Technician,Date Reported,Date Solved,Days Pending,Current Status,Feedback\n';
-  appState.complaints.forEach(c => {
+  (appState.complaints || []).forEach(c => {
     const days = typeof getDaysPending === 'function' ? getDaysPending(c.reportedAt) : 0;
     const solvedDate = (c.stage === 7 || c.status === 'Completed') ? (c.admin_final_date || c.technician_completion_date || c.reportedAt) : 'N/A';
     csv += `"${c.id}","${c.reportedBy}","${c.reportedByGr}","${c.category}","${(c.title || '').replace(/"/g, '""')}","${c.techName || ''}","${c.reportedAt}","${solvedDate}","${days}","${c.status}","${c.feedback || ''}"\n`;
@@ -1664,8 +1636,27 @@ function exportCSV() {
   anchor.click();
 }
 
+function exportCSV() {
+  // Use server-side CSV export with MySQL data, fallback to client CSV
+  fetch('api/reports/complaints.php?format=csv')
+    .then(res => {
+      if (res.ok) {
+        window.location.href = 'api/reports/complaints.php?format=csv';
+      } else {
+        fallbackExportCSV();
+      }
+    })
+    .catch(() => fallbackExportCSV());
+}
+
 function printReport() { window.print(); }
 
 document.addEventListener('DOMContentLoaded', () => {
-  renderByRole();
+  if (typeof syncAppState === 'function') {
+    syncAppState(() => {
+      renderByRole();
+    });
+  } else {
+    renderByRole();
+  }
 });

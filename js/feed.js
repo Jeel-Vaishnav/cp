@@ -15,13 +15,28 @@ function filterPublicFeed(dept) {
   renderPublicFeed(activeFeedFilter);
 }
 
-function renderPublicFeed(filter = 'all') {
+async function renderPublicFeed(filter = 'all') {
   const grid = document.getElementById('publicFeedGrid');
   if (!grid) return;
   
-  let list = (typeof appState !== 'undefined' && appState.complaints) ? appState.complaints : [];
-  if (filter !== 'all') {
-    list = list.filter(c => c.category === filter || c.dept === filter);
+  let list = [];
+  try {
+    const res = await fetch(`api/complaints/public.php?dept=${encodeURIComponent(filter)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.feed)) {
+        list = data.feed;
+      }
+    }
+  } catch (err) {
+    console.warn('Feed fetch warning:', err);
+  }
+
+  if (list.length === 0 && typeof appState !== 'undefined' && appState.complaints) {
+    list = appState.complaints;
+    if (filter !== 'all') {
+      list = list.filter(c => c.category === filter || c.dept === filter);
+    }
   }
 
   if (list.length === 0) {

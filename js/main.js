@@ -511,6 +511,35 @@ if (appState && appState.complaints) {
 }
 function persist() { localStorage.setItem(REPO_KEY, JSON.stringify(appState)); }
 
+async function syncAppState(callback) {
+  try {
+    const res = await fetch('api/sync.php');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        if (Array.isArray(data.complaints)) appState.complaints = normalizeComplaints(data.complaints);
+        if (Array.isArray(data.technicians)) appState.technicians = data.technicians;
+        if (Array.isArray(data.faculties)) appState.faculties = data.faculties;
+        if (Array.isArray(data.users)) appState.users = data.users;
+        if (Array.isArray(data.notifs)) appState.notifs = data.notifs;
+        persist();
+        if (data.session) {
+          currentSession = data.session;
+          currentSession.expiresAt = Date.now() + SESSION_SLA_MS;
+          localStorage.setItem('campus_session', JSON.stringify(currentSession));
+          sessionStorage.setItem('campus_session_active', '1');
+        }
+        if (typeof syncNavProfile === 'function') syncNavProfile();
+        if (typeof renderNotifs === 'function') renderNotifs();
+        if (typeof callback === 'function') callback();
+      }
+    }
+  } catch (err) {
+    console.warn('API sync warning:', err);
+    if (typeof callback === 'function') callback();
+  }
+}
+
 let currentSession = null;
 try {
   const savedSession = localStorage.getItem('campus_session');
@@ -538,7 +567,10 @@ let tmpBase64ProfileAvatar = null;
 let qaApprovalState = true;
 let sessionWatcherTimer = null;
 
-function logout(isAutoExpired = false) {
+async function logout(isAutoExpired = false) {
+  try {
+    await fetch('api/auth/logout.php', { method: 'POST' });
+  } catch (e) {}
   currentSession = null;
   localStorage.removeItem('campus_session');
   localStorage.removeItem('campus_hidden_timestamp');
@@ -665,13 +697,32 @@ function handleProfileImgUpload(input) {
   }; r.readAsDataURL(file);
 }
 
-function saveProfile(e) {
+async function saveProfile(e) {
   e.preventDefault();
   const name = document.getElementById('profName').value.trim();
   const dept = document.getElementById('profDept').value.trim();
   const pass = document.getElementById('profPass').value;
   const url = document.getElementById('profImgUrl').value.trim();
   let finalAvatar = url || tmpBase64ProfileAvatar || null;
+
+  try {
+    const res = await fetch('api/users/update.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        department: dept,
+        password: pass,
+        avatar: finalAvatar
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return toast(data.message || 'Failed to update profile', 'err');
+    }
+  } catch (err) {
+    console.warn('Network error saving profile:', err);
+  }
 
   if (currentSession.role === 'student') {
     const u = appState.users.find(x => x.grNo === currentSession.grNo);
@@ -686,6 +737,7 @@ function saveProfile(e) {
   localStorage.setItem('campus_session', JSON.stringify(currentSession));
   closeProfileModal();
   toast('Profile updated successfully!');
+  if (typeof syncAppState === 'function') syncAppState();
   if (typeof syncNavProfile === 'function') syncNavProfile();
   if (typeof renderByRole === 'function') renderByRole();
 }
@@ -727,8 +779,12 @@ function renderNotifs() {
   });
 }
 
-function markAllRead() {
+async function markAllRead() {
   if (!currentSession) return;
+  try {
+    await fetch('api/notifications/read.php', { method: 'POST' });
+  } catch (e) {}
+
   appState.notifs.forEach(n => {
     if (currentSession.role === 'student' && (n.forGr === currentSession.grNo || n.forGr === null)) n.read = true;
     if (currentSession.role === 'faculty' && (n.forDept === currentSession.dept || n.forDept === null)) n.read = true;
@@ -799,6 +855,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (currentSession) {
     runSessionTimer();
   }
+  syncAppState();
   checkAdminReminders();
 
   document.addEventListener('click', e => {
