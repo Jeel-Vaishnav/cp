@@ -28,14 +28,16 @@
   [headers.values]
     Cache-Control = "public, max-age=86400"
 
-# API Proxy:
-# Note: Netlify CANNOT run PHP or MySQL natively.
-# Once your PHP backend is deployed on Render/Railway/Fly.io/cPanel,
-# replace YOUR_BACKEND_URL with your backend URL (e.g., https://campus-connect-api.onrender.com).
-# This seamlessly proxies /api/* calls to your PHP server without CORS issues!
-#
-# [[redirects]]
-#   from = "/api/*"
-#   to = "https://YOUR_BACKEND_URL/api/:splat"
-#   status = 200
-#   force = true
+# API and Uploads Proxy to Render Backend
+[[redirects]]
+  from = "/api/*"
+  to = "https://cp-8iea.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/uploads/*"
+  to = "https://cp-8iea.onrender.com/uploads/:splat"
+  status = 200
+  force = true
+
